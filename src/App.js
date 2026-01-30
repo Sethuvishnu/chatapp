@@ -1,5 +1,4 @@
-// src/App.js
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import "./App.css";
 
 import { initializeApp } from "firebase/app";
@@ -9,15 +8,25 @@ import {
   query,
   orderBy,
   limit,
+  limitToLast,
   addDoc,
   serverTimestamp,
+  getDocs,
+  updateDoc,
+  where,
 } from "firebase/firestore";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
 
 import { useAuthState } from "react-firebase-hooks/auth";
 import { useCollectionData } from "react-firebase-hooks/firestore";
 
-// 🔹 Your Firebase config
+/* 🔹 Firebase config */
 const firebaseConfig = {
   apiKey: "AIzaSyC0WWw-y6UgnlPcnoGznokM4trWThG9eRY",
   authDomain: "chatapp-5847d.firebaseapp.com",
@@ -27,10 +36,12 @@ const firebaseConfig = {
   appId: "1:1058214781304:web:3222c10e277cefc608288d",
 };
 
-// Initialize Firebase
+/* 🔹 Initialize Firebase */
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const firestore = getFirestore(app);
+
+/* ================= APP ================= */
 
 function App() {
   const [user] = useAuthState(auth);
@@ -47,14 +58,12 @@ function App() {
   );
 }
 
+/* ================= SIGN IN ================= */
+
 function SignIn() {
   const signInWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (err) {
-      console.error("Google sign-in error:", err);
-    }
+    await signInWithPopup(auth, provider);
   };
 
   return (
@@ -62,10 +71,12 @@ function SignIn() {
       <button className="sign-in" onClick={signInWithGoogle}>
         Sign in with Google
       </button>
-      <p>Do not violate the community guidelines or you will be banned for life!</p>
+      <p>Do not violate the community guidelines.</p>
     </>
   );
 }
+
+/* ================= SIGN OUT ================= */
 
 function SignOut() {
   return (
@@ -77,16 +88,61 @@ function SignOut() {
   );
 }
 
+/* ================= CHAT ROOM ================= */
+
 function ChatRoom() {
   const dummy = useRef();
-  const messagesRef = collection(firestore, "messages");
-  const messagesQuery = query(messagesRef, orderBy("createdAt"), limit(25));
-
-  const [messages] = useCollectionData(messagesQuery, { idField: "id" });
+  const [roomId, setRoomId] = useState(null);
   const [formValue, setFormValue] = useState("");
+
+  /* 🔹 Find or create a room (MAX 2 USERS) */
+  useEffect(() => {
+    const getOrCreateRoom = async () => {
+      const roomsRef = collection(firestore, "rooms");
+
+      const q = query(
+        roomsRef,
+        where("usersCount", "<", 2),
+        limit(1) // ✅ FIXED
+      );
+
+      const snapshot = await getDocs(q);
+
+      if (!snapshot.empty) {
+        const room = snapshot.docs[0];
+        await updateDoc(room.ref, {
+          usersCount: room.data().usersCount + 1,
+        });
+        setRoomId(room.id);
+      } else {
+        const newRoom = await addDoc(roomsRef, {
+          usersCount: 1,
+          createdAt: serverTimestamp(),
+        });
+        setRoomId(newRoom.id);
+      }
+    };
+
+    getOrCreateRoom();
+  }, []);
+
+  /* ✅ Hooks must ALWAYS run */
+  const messagesRef = roomId
+    ? collection(firestore, "rooms", roomId, "messages")
+    : null;
+
+  const messagesQuery = messagesRef
+    ? query(messagesRef, orderBy("createdAt"), limitToLast(100))
+    : null;
+
+  const [messages] = useCollectionData(messagesQuery, {
+    idField: "id",
+  });
 
   const sendMessage = async (e) => {
     e.preventDefault();
+    if (!roomId) return;
+
     const { uid, photoURL } = auth.currentUser;
 
     await addDoc(messagesRef, {
@@ -100,10 +156,17 @@ function ChatRoom() {
     dummy.current.scrollIntoView({ behavior: "smooth" });
   };
 
+  if (!roomId) {
+    return <p>Finding a chat partner...</p>;
+  }
+
   return (
     <>
       <main>
-        {messages && messages.map((msg) => <ChatMessage key={msg.id} message={msg} />)}
+        {messages &&
+          messages.map((msg) => (
+            <ChatMessage key={msg.id} message={msg} />
+          ))}
         <span ref={dummy}></span>
       </main>
 
@@ -121,14 +184,20 @@ function ChatRoom() {
   );
 }
 
+/* ================= MESSAGE ================= */
+
 function ChatMessage({ message }) {
   const { text, uid, photoURL } = message;
-  const messageClass = uid === auth.currentUser.uid ? "sent" : "received";
+  const messageClass =
+    uid === auth.currentUser.uid ? "sent" : "received";
 
   return (
     <div className={`message ${messageClass}`}>
       <img
-        src={photoURL || "https://api.adorable.io/avatars/23/abott@adorable.png"}
+        src={
+          photoURL ||
+          "https://api.dicebear.com/7.x/identicon/svg"
+        }
         alt="avatar"
       />
       <p>{text}</p>
